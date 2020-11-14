@@ -69,8 +69,8 @@ namespace TinyTool
         public const string DstXlsPath = "../DstExcels/";
         public const string MainSheetName = "总装厂全厂人员";
         public const string RecordSheetName = "考勤补录";
-        public const string MainExcelName = "信阳总装10月考勤汇总1-30.xls"; //信阳总装考勤汇总9.1-20
-        public const string RollCardExcelName = "26-30.xls";
+        public const string MainExcelName = "信阳总装11月考勤汇总1-13.xls"; //信阳总装考勤汇总9.1-20
+        public const string RollCardExcelName = "9-13.xls";
         public const int MainIDCol = 4;
         public const int MainNameCol = 5;
         public const int MainNameCol2 = 6;
@@ -87,15 +87,20 @@ namespace TinyTool
         //参考下午上班时间
         public const int AfternoonStartTime = 13 * 3600 + 1800;
         //参考夜班上班时间秒数
-        public const int StartNightWorkTime = 18 * 3600;
+        public const int StartNightWorkTime = 20 * 3600;
         //参考夜班下班时间秒数
-        public const int EndNightWorkTime = 26 * 3600;
+        public const int EndNightWorkTime = 29 * 3600;
         //参考夜班加班时间秒数
-        public const int StartNightOverTime = 26 * 3600;
+        public const int StartNightOverTime = 29 * 3600;
         //白班起始时间判定
         public const int DayStartTime = 6 * 3600 + 1800;
         //白班中止时间判定
         public const int DayEndTime = 17 * 3600;
+
+        public const int LastNightStartTime = 19 * 3600;
+        public const int LastNightEndTime = 20 * 3600;
+        public const int TodayNightEndTime = 8 * 3600;
+        public const int TodayNightEndMaxTime = 9 * 3600;
 
         /// <summary>
         /// key: 员工工号,唯一 value: 员工的考勤纪录
@@ -225,7 +230,7 @@ namespace TinyTool
                     if (firstTime == -1 || lastTime == -1)
                     {
                         checkTime.IsNormal = false;
-                        Console.WriteLine($"员工 {staff.Name} ${time.Key}号 打卡数据异常");
+                        Console.WriteLine($"员工 {staff.Name} {time.Key}号 打卡数据异常");
                         continue;
                     }
                     checkTime.FirstTime = firstTime;
@@ -293,6 +298,7 @@ namespace TinyTool
                                 checkTime.ExcusedTime = EndNightWorkTime - lastTime;
                             }
                             checkTime.OverTime = checkTime.LastTime - Math.Max(checkTime.FirstTime, StartNightOverTime);
+                            checkTime.OverTime = Math.Min(checkTime.OverTime, 3*3600);
                         }
                         else //如果在异常时间段,就判定旷工
                         {
@@ -308,8 +314,12 @@ namespace TinyTool
             Console.WriteLine("打卡数据解析完毕");
         }
         /// <summary>
-        /// 首次打卡在[6:30,17)范围内表示白班,其他范围可能是夜班也可能是白班忘记一次打卡
-        /// 白班夜班混合上:暂时不做处理,需人工处理
+        /// 新考勤时间
+        /// 夜班从晚8点开始到第二天早5点,早5点到早8点算加班时间,最多加班3个小时
+        /// 现在夜班时间和白班时间有重叠,之前根据6:30分界线判断已经失效
+        /// 仅通过几个特征判断夜班,根据效果再逐步优化: 
+        /// 1 当天第一次打卡时间超过8:00
+        /// 2 前一天最后打卡时间介于19:00-20:00
         /// </summary>
         /// <param name="check"></param>
         /// <param name="day"></param>
@@ -319,13 +329,16 @@ namespace TinyTool
             check.RecordTime.TryGetValue(day, out List<DateTime> list);
             if (list != null && list.Count > 0)
             {
-                //只要白班时间范围内有打卡就判定白班
-                var index = list.FindIndex((t) =>
-                       {
-                           var s = CalTotalSeconds(t);
-                           return s >= DayStartTime && s < DayEndTime;
-                       });
-                return index != -1;
+                check.RecordTime.TryGetValue(day - 1, out List<DateTime> list2);
+                if(list2 != null && list2.Count > 0)
+                {
+                    var s = CalTotalSeconds(list[0]);
+                    var s2 = CalTotalSeconds(list2[list2.Count - 1]);
+                    if( s >= TodayNightEndTime && s2 >= LastNightStartTime && s2 <= LastNightEndTime)
+                    {
+                        return false;
+                    }
+                }
             }
             return true;
         }
@@ -356,7 +369,7 @@ namespace TinyTool
         }
 
         /// <summary>
-        /// 获得员工当天夜班开始时间:从17:00算起第一个有效打卡时间(转换成秒数)
+        /// 获得员工当天夜班开始时间:从19:00算起第一个有效打卡时间(转换成秒数)
         /// 如果没有获得6:30之前打卡时间
         /// </summary>
         /// <param name="check"></param>
@@ -367,16 +380,16 @@ namespace TinyTool
             check.RecordTime.TryGetValue(day, out List<DateTime> list);
             if (list != null && list.Count > 0)
             {
-                var index = list.FindIndex((time) => time.Hour >= 17);
+                var index = list.FindIndex((time) => time.Hour >= 19);
                 if (index != -1)
                 {
                     return CalTotalSeconds(list[index]);
                 }
-                //夜班17:00之后打卡数据没有，再次获得6:30之前打卡数据
+                //夜班19:00之后打卡数据没有，再次获得6:30之前打卡数据
                 index = list.FindIndex((time) =>
                 {
                     var s = CalTotalSeconds(time);
-                    return s < DayStartTime;
+                    return s < TodayNightEndTime;
                 });
                 if (index != -1)
                 {
@@ -410,7 +423,7 @@ namespace TinyTool
                 var index = list1.FindLastIndex((time) =>
                 {
                     var s = CalTotalSeconds(time);
-                    return s < DayStartTime;
+                    return s < TodayNightEndMaxTime;
                 });
                 if (index != -1)
                 {
@@ -421,7 +434,7 @@ namespace TinyTool
                     check.RecordTime.TryGetValue(day, out List<DateTime> list0);
                     if (list0 != null && list0.Count > 0)
                     {
-                        index = list0.FindLastIndex((time) => time.Hour >= 17);
+                        index = list0.FindLastIndex((time) => time.Hour >= 19);
                         if (index != -1)
                         {
                             return CalTotalSeconds(list0[index]);
@@ -430,7 +443,7 @@ namespace TinyTool
                         index = list0.FindIndex((time) =>
                         {
                             var s = CalTotalSeconds(time);
-                            return s < DayStartTime;
+                            return s < TodayNightEndMaxTime;
                         });
                         if (index != -1)
                         {
@@ -453,7 +466,7 @@ namespace TinyTool
                     index = list0.FindIndex((time) =>
                     {
                         var s = CalTotalSeconds(time);
-                        return s < DayStartTime;
+                        return s < TodayNightEndMaxTime;
                     });
                     if (index != -1)
                     {
@@ -474,7 +487,7 @@ namespace TinyTool
         ///  时间段2: 13:30-17:30
         ///  时间段3: 18:00-24:00
         ///  夜班
-        ///  时间段1 18:00-7:00
+        ///  时间段1 20:00-8:00
         /// </summary>
         /// <param name="seconds"></param>
         /// <returns></returns>
@@ -510,7 +523,7 @@ namespace TinyTool
             }
             else
             {
-                if (seconds >= 17 * 3600 && seconds < StartNightWorkTime)
+                if (seconds >= 19 * 3600 && seconds < StartNightWorkTime)
                 {
                     seconds = StartNightWorkTime;
                 }
